@@ -2,6 +2,7 @@ import subprocess
 import threading
 import time
 import datetime
+import os
 from typing import Final, List, Optional
 from utils.FFmpegUtils import FFmpegUtils
 from utils.DetectGPU import DetectGPU
@@ -26,6 +27,8 @@ class VideoRecorder:
     ):
         if not video_device:
             raise ValueError("Video device is required for recording")
+        
+        os.makedirs(os.path.dirname(output_file), exist_ok=True)
         
         self.video_device = video_device
         self.output_file = output_file
