@@ -1,20 +1,42 @@
-import datetime
-from video_utils.FFmpegUtils import FFmpegUtils
-from video_utils.Recording import Recorder
+from utils.FFmpegUtils import FFmpegUtils
+from recording.VideoRecorder import VideoRecorder
+from recording.RecordingController import RecordingController
 
-video_device, audio_device = FFmpegUtils.detect_devices()
-print("Video device:", video_device)
-print("Audio device:", audio_device)
+def main():
+    success, message = FFmpegUtils.video_devices_available()
+    print(message)
+    
+    if not success:
+        return
 
-output_file = f"videos/{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+    video_devices = FFmpegUtils.detect_video_devices()
+    if not video_devices:
+        print("No video devices detected")
+        return
+    
+    print(f"Detected video devices: {video_devices}")
 
-recorder = Recorder(
-    video_device=video_device,
-    audio_device=audio_device,
-    output_file=output_file,
-    duration=5,
-    # codec_name="H.265_HEVC",
-    # resolution="1360x768"
-)
+    controllers = []
+    for idx, device in enumerate(video_devices, start=1):
+        output_file: str = f"videos/camera{idx}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
+        recorder: VideoRecorder = VideoRecorder(video_device=device, output_file=output_file)
+        controller: RecordingController = RecordingController(recorder)
+        controllers.append(controller)
 
-recorder.record()
+    # Iniciar grabación de todas las cámaras simultáneamente
+    for ctrl in controllers:
+        ctrl.start()
+    print("Recording started for all cameras")
+
+    for ctrl in controllers:
+        print(f"Camera {ctrl.recorder.video_device} recording: {ctrl.is_recording()}")
+
+    input("Press Enter to stop all recordings...")
+
+    for ctrl in controllers:
+        ctrl.stop()
+    print("All recordings stopped")
+
+if __name__ == "__main__":
+    import datetime
+    main()
