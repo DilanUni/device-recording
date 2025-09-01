@@ -6,6 +6,7 @@ import os
 from typing import Final, List, Optional
 from utils.FFmpegUtils import FFmpegUtils
 from utils.DetectGPU import DetectGPU
+from utils.logger import logger
 
 class VideoRecorder:
     """
@@ -63,14 +64,13 @@ class VideoRecorder:
         Returns True if recording started successfully.
         """
         if self.is_recording:
-            print("Recording is already in progress")
+            logger.warning("Recording is already in progress")
             return False
         
         try:
             cmd = self._build_ffmpeg_command()
-            print("Starting continuous recording with command:", " ".join(cmd))
+            logger.info(f"Starting recording with command: {' '.join(cmd)}")
             
-            # Start FFmpeg process
             self.process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -78,18 +78,18 @@ class VideoRecorder:
                 stdin=subprocess.PIPE,
                 text=True
             )
-            
             self.is_recording = True
-            print(f"Continuous recording started for {self.video_device}")
-            print(f"Output file: {self.output_file}")
-            print("Use stop_recording() to terminate the recording")
+            self._log_recording_event("START")
             
-            # Start a thread to monitor the process
             self.monitor_thread = threading.Thread(target=self._monitor_process)
             self.monitor_thread.daemon = True
             self.monitor_thread.start()
             
             return True
+            
+        except Exception as e:
+            logger.error(f"Error starting recording: {e}")
+            return False
             
         except Exception as e:
             print(f"Error starting recording: {e}")
@@ -101,37 +101,29 @@ class VideoRecorder:
         Returns True if stopped successfully.
         """
         if not self.is_recording or not self.process:
-            print("No recording in progress to stop")
+            logger.warning("No recording in progress to stop")
             return False
         
         try:
-            print("Stopping recording...")
-            # Send 'q' to FFmpeg to gracefully stop recording
             self.process.stdin.write('q\n')
             self.process.stdin.flush()
-            
-            # Wait for process to terminate
             self.process.wait(timeout=10)
             self.is_recording = False
             self.process = None
-            
-            print("Recording stopped successfully")
+            self._log_recording_event("STOP")
             return True
             
         except subprocess.TimeoutExpired:
-            print("Force terminating recording...")
+            logger.warning("Force terminating recording")
             self.process.terminate()
             self.process.wait(timeout=5)
             self.is_recording = False
             self.process = None
+            self._log_recording_event("STOP")
             return True
             
         except Exception as e:
-            print(f"Error stopping recording: {e}")
-            try:
-                self.process.terminate()
-            except:
-                pass
+            logger.error(f"Error stopping recording: {e}")
             self.is_recording = False
             self.process = None
             return False
@@ -194,3 +186,12 @@ class VideoRecorder:
         except Exception as e:
             print(f"Error during recording: {e}")
             return False
+        
+    def _log_recording_event(self, event_type: str):
+            """
+            Logs an event related to recording.
+            event_type: "START" or "STOP"
+            """
+            logger.info(
+                f"{event_type} Recording | Device: {self.video_device} | Codec: {self.codec} | File: {self.output_file}"
+            )
