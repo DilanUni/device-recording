@@ -1,59 +1,70 @@
-from utils.FFmpegUtils import FFmpegUtils
-from recording.VideoRecorder import VideoRecorder
+from utils.VideoDeviceDetection import VideoDeviceDetection
+from recording.VideoDeviceRecorder import VideoDeviceRecorder
 from recording.RecordingController import RecordingController
+from recording.VideoFileRecorder import VideoFileRecorder
 import datetime
 
-
-def record_cameras(selected_devices: list[str]):
-    """Inicia la grabación de una o varias cámaras pasadas en `selected_devices`."""
-    controllers = []
+def record_cameras(selected_devices: list[str]) -> None:
+    controllers: list[RecordingController] = []
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     for idx, device in enumerate(selected_devices, start=1):
-        output_file = f"videos/camera{idx}_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
-        recorder = VideoRecorder(video_device=device, output_file=output_file)
-        controller = RecordingController(recorder)
-        controllers.append(controller)
+        output_file = f"Videos/Cameras/{idx}_{timestamp}.mp4"
+        recorder = VideoDeviceRecorder(video_device=device, output_file=output_file)
+        controllers.append(RecordingController(recorder))
 
-    # Iniciar grabaciones
+    # Start recordings
     for ctrl in controllers:
         ctrl.start()
     print(f"Recording started for devices: {selected_devices}")
 
+    # Status check
     for ctrl in controllers:
-        print(f"Camera {ctrl.recorder.video_device} recording: {ctrl.is_recording()}")
+        print(f"Camera '{ctrl.recorder.video_device}' -> recording: {ctrl.is_recording()}")
 
     input("Press Enter to stop recordings...")
 
+    # Stop recordings
     for ctrl in controllers:
         ctrl.stop()
-    print("Recordings stopped.")
+    print("All recordings stopped.")
 
 
-def main():
-    success, message = FFmpegUtils.video_devices_available()
+def create_video_clips() -> None:
+    input_file = "Videos/VideoFiles/video.mp4"
+    output_dir = "Videos/VideoFiles/Clips"
+    recorder = VideoFileRecorder(input_file=input_file, output_dir=output_dir)
+
+    clip1 = recorder.create_clip(10, 20)
+    clip2 = recorder.create_clip(30, 45)
+    clip3 = recorder.create_clip(50, 60)
+
+    print("Clips started:", clip1, clip2, clip3)
+
+
+def main() -> None:
+    # ----- Camera recording example -----
+    has_devices, message = VideoDeviceDetection.has_devices()
     print(message)
 
-    if not success:
-        return
+    if has_devices:
+        devices = VideoDeviceDetection.list_devices()
+        print(f"Detected video devices: {devices}")
 
-    video_devices = FFmpegUtils.detect_video_devices()
-    if not video_devices:
-        print("No video devices detected")
-        return
+        if devices:
+            print("\n--- Recording only the first camera ---")
+            record_cameras([devices[0]])
 
-    print(f"Detected video devices: {video_devices}")
+            """
+            if len(devices) >= 2:
+                print("\n--- Recording first and second cameras ---")
+                record_cameras(devices[:2])
 
-    print("\n--- Recording only the first camera ---")
-    record_cameras([video_devices[0]])
-    
-"""
-    if len(video_devices) >= 2:
-        print("\n--- Recording first and second cameras ---")
-        record_cameras(video_devices[:2])
+            print("\n--- Recording all cameras ---")
+            record_cameras(devices)
+            """
 
-    print("\n--- Recording all cameras ---")
-    record_cameras(video_devices)
-
-"""
+    print("\n--- Creating video clips ---")
+    create_video_clips()
 
 if __name__ == "__main__":
     main()
