@@ -1,9 +1,9 @@
 from threading import Event, Thread
 from typing import Optional
-from .VideoRecorder import VideoRecorder
+from .VideoDeviceRecorder import VideoDeviceDetection
 
 class RecordingController:
-    def __init__(self, recorder: VideoRecorder):
+    def __init__(self, recorder: VideoDeviceDetection):
         self.recorder = recorder
         self.stop_event = Event()
         self.recording_thread: Optional[Thread] = None

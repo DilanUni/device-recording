@@ -4,11 +4,11 @@ import time
 import datetime
 import os
 from typing import Final, List, Optional
-from utils.FFmpegUtils import FFmpegUtils
+from utils.VideoDeviceDetection import VideoDeviceDetection
 from utils.DetectGPU import DetectGPU
 from utils.logger import logger
 
-class VideoRecorder:
+class VideoDeviceRecorder:
     """
     Handles continuous video recording using FFmpeg for security system (video only).
     Records indefinitely until stopped manually.
@@ -22,9 +22,9 @@ class VideoRecorder:
     def __init__(
         self,
         video_device: str,
-        output_file: str = f"videos/camera{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4",
+        output_file: str = f"videos/cameras/camera{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4",
         resolution: str = "1280x720",
-        ffmpeg_path: str = FFmpegUtils.FFMPEG_PATH
+        ffmpeg_path: str = VideoDeviceDetection.FFMPEG_PATH
     ):
         if not video_device:
             raise ValueError("Video device is required for recording")
@@ -45,19 +45,69 @@ class VideoRecorder:
 
     def _build_ffmpeg_command(self) -> List[str]:
         """
-        Builds the FFmpeg command for continuous video-only recording.
+        Builds the optimized FFmpeg command for high-performance video recording.
         """
-        return [
+        base_cmd = [
             self.ffmpeg_path,
             "-f", "dshow",
             "-i", f"video={self.video_device}",
             "-c:v", self.codec,
             "-s", self.resolution,
             "-an",  # Disable audio recording
-            "-y",   # Overwrite output file
-            self.output_file
+            "-y"   # Overwrite output file
         ]
-
+        
+        # Common optimizations for all codecs
+        common_params = [
+            "-tune", "zerolatency",     # Minimize latency
+            "-movflags", "+faststart",  # Web optimization
+            "-pix_fmt", "yuv420p"       # Most compatible pixel format
+        ]
+        
+        # GPU-specific optimizations
+        gpu_params = []
+        if self.codec == "hevc_nvenc":  # NVIDIA
+            gpu_params = [
+                "-preset", "p5",           # Performance preset (p1-p7, p1=fastest)
+                "-tune", "ll",             # Low latency
+                "-rc", "constqp",          # Constant QP for consistent quality
+                "-qp", "23",               # Quality level (0-51, lower=better)
+                "-gpu", "0",               # Use first GPU
+                "-delay", "0",             # No delay
+                "-no-scenecut", "1"        # Disable scene cut detection for performance
+            ]
+        elif self.codec == "hevc_amf":    # AMD
+            gpu_params = [
+                "-usage", "ultralowlatency",
+                "-quality", "speed",       # Prioritize speed over quality
+                "-preanalysis", "0",       # Disable pre-analysis (0=false)
+                "-vbaq", "0",              # Disable VBAQ for performance (0=false)
+                "-enforce_hrd", "0",       # Disable HRD enforcement (0=false)
+                "-filler_data", "0"        # Disable filler data (0=false)
+            ]
+        elif self.codec == "libx265":     # CPU
+            gpu_params = [
+                "-preset", "veryfast",     # Faster CPU encoding
+                "-tune", "zerolatency",
+                "-x265-params", "no-scenecut=1:keyint=30:min-keyint=30"
+            ]
+        
+        # Input optimizations (reduce CPU usage)
+        input_optimizations = [
+            "-fflags", "+nobuffer+flush_packets",
+            "-flags", "low_delay",
+            "-avioflags", "direct",
+            "-probesize", "32",
+            "-analyzeduration", "0"
+        ]
+        
+        # Para AMD, no usar -preset en common_params
+        if self.codec == "hevc_amf":
+            return base_cmd + input_optimizations + gpu_params + [self.output_file]
+        else:
+            return base_cmd + input_optimizations + common_params + gpu_params + [self.output_file]
+        
+    
     def start_recording(self) -> bool:
         """
         Starts continuous video recording in a separate thread.
@@ -195,3 +245,4 @@ class VideoRecorder:
             logger.info(
                 f"{event_type} Recording | Device: {self.video_device} | Codec: {self.codec} | File: {self.output_file}"
             )
+        
