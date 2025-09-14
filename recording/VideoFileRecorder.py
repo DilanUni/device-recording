@@ -5,13 +5,13 @@ import os
 from typing import Final, List
 from utils.DetectGPU import DetectGPU
 from utils.VideoDeviceDetection import VideoDeviceDetection
-from utils.logger import logger
-
+from utils.VideoLogger import VideoLogger
 
 class VideoFileRecorder:
     """
     Handles creation of video clips from a video file concurrently.
     Each clip runs independently in its own thread, using GPU if available.
+    Logs all events with VideoLogger.
     """
 
     CODECS: Final[dict[str, str]] = {
@@ -32,7 +32,12 @@ class VideoFileRecorder:
 
         gpu_vendor = DetectGPU.detect_gpu_vendor()
         self.codec = self.CODECS.get(gpu_vendor, "libx265")
-        print(f"Using codec: {self.codec}")
+
+        # Initialize logger
+        self.video_logger = VideoLogger()
+
+        # Guardar hilos activos de clips
+        self._active_threads: List[threading.Thread] = []
 
     def _build_ffmpeg_command(self, start_time: float, end_time: float, output_file: str) -> List[str]:
         duration = end_time - start_time
@@ -60,29 +65,55 @@ class VideoFileRecorder:
         return cmd
 
     def _run_clip(self, start_time: float, end_time: float, output_file: str) -> None:
-        """
-        Internal method that runs FFmpeg for a clip.
-        Thread will terminate and release resources when done.
-        """
+        self.video_logger.log_event(
+            source=self.input_file,
+            output_file=output_file,
+            codec=self.codec,
+            event="START",
+            timestamp=datetime.datetime.now(),
+            status="IN_PROGRESS",
+            extra={"clip_start": start_time, "clip_end": end_time}
+        )
+
         try:
             cmd = self._build_ffmpeg_command(start_time, end_time, output_file)
-            logger.info(f"Starting clip: {output_file}")
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             stdout, stderr = process.communicate()
-            if process.returncode == 0:
-                logger.info(f"Clip finished: {output_file}")
-            else:
-                logger.error(f"FFmpeg failed ({process.returncode}) for {output_file}: {stderr}")
+
+            status = "SUCCESS" if process.returncode == 0 else "FAILED"
+            self.video_logger.log_event(
+                source=self.input_file,
+                output_file=output_file,
+                codec=self.codec,
+                event="STOP",
+                timestamp=datetime.datetime.now(),
+                duration=end_time - start_time,
+                status=status,
+                extra={"ffmpeg_stderr": stderr}
+            )
         except Exception as e:
-            logger.error(f"Error creating clip {output_file}: {e}")
+            self.video_logger.log_event(
+                source=self.input_file,
+                output_file=output_file,
+                codec=self.codec,
+                event="ERROR",
+                timestamp=datetime.datetime.now(),
+                status="FAILED",
+                extra={"exception": str(e)}
+            )
 
     def create_clip(self, start_time: float, end_time: float) -> str:
-        """
-        Launches a clip in its own thread. Returns the clip path immediately.
-        Thread handles completion and resource cleanup internally.
-        """
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         output_file = os.path.join(self.output_dir, f"clip_{timestamp}.mp4")
         thread = threading.Thread(target=self._run_clip, args=(start_time, end_time, output_file), daemon=True)
         thread.start()
+        self._active_threads.append(thread)
         return output_file
+
+    def wait_for_all_clips(self) -> None:
+        """
+        Espera a que todos los clips que se iniciaron terminen su procesamiento.
+        """
+        for thread in self._active_threads:
+            thread.join()
+        self._active_threads.clear()
