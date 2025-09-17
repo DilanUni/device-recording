@@ -10,8 +10,9 @@ BAUDIOS: int = 9600
 CAMERA_CONTROLLERS: list[VideoDeviceRecordingController] = []
 arduino: serial.Serial = serial.Serial(PUERTO, BAUDIOS, timeout=1)
 
-# Guardamos el último estado conocido de la alarma
-last_alarm_state: str = "0"
+# Estado de grabación (True = grabando, False = detenido)
+is_recording: bool = False
+
 
 def record_cameras(selected_devices: list[str]) -> list[VideoDeviceRecordingController]:
     """Start recording cameras and return controllers."""
@@ -24,19 +25,35 @@ def record_cameras(selected_devices: list[str]) -> list[VideoDeviceRecordingCont
         print(f"Recording started for camera: {device}")
     return controllers
 
+
 def stop_cameras():
     """Stop all active recordings."""
-    global CAMERA_CONTROLLERS
+    global CAMERA_CONTROLLERS, is_recording
     if CAMERA_CONTROLLERS:
         for ctrl in CAMERA_CONTROLLERS:
             ctrl.stop()
         CAMERA_CONTROLLERS = []
         print("All camera recordings stopped.")
+    is_recording = False
+
+
+def toggle_recording():
+    """Alterna entre grabar y detener."""
+    global is_recording, CAMERA_CONTROLLERS
+
+    if not is_recording:
+        has_devices, message = VideoDeviceDetection.has_devices()
+        print(message)
+        devices: list[str] = VideoDeviceDetection.list_devices() if has_devices else []
+        if devices:
+            CAMERA_CONTROLLERS = record_cameras(devices[:1])
+            is_recording = True
+    else:
+        stop_cameras()
+
 
 def escuchar_arduino():
     """Hilo para leer mensajes que envía el Arduino"""
-    global CAMERA_CONTROLLERS, last_alarm_state
-
     while True:
         if arduino.in_waiting > 0:
             mensaje = arduino.readline().decode('utf-8', errors='ignore').strip()
@@ -45,23 +62,9 @@ def escuchar_arduino():
 
             print(f"[Arduino] {mensaje}")
 
-            if mensaje.startswith("alarmaActiva="):
-                estado = mensaje.split("=")[1]
+            if mensaje.startswith("alarmaActiva=1"):
+                toggle_recording()
 
-                if estado != last_alarm_state:
-                    last_alarm_state = estado
-                    print(f"[ESTADO] alarmaActiva cambió a {estado}")
-
-                    if estado == "1":
-                        has_devices, message = VideoDeviceDetection.has_devices()
-                        print(message)
-                        devices: list[str] = VideoDeviceDetection.list_devices() if has_devices else []
-                        if devices and not CAMERA_CONTROLLERS:
-                            CAMERA_CONTROLLERS = record_cameras(devices[:1])
-                    elif estado == "0":
-                        stop_cameras()
-
-            # --- Manejo de comandos ---
             elif mensaje == "⚠ Sistema DESACTIVADO":
                 stop_cameras()
 
@@ -74,7 +77,7 @@ print("Conexión establecida ")
 print("'activacion' o 'desactivacion' para controlar el sistema.")
 print("'salir' para cerrar.")
 
-# Bucle principal para mandar comandos
+# Bucle principal para mandar comandos manuales
 while True:
     comando = input(">> ").strip()
     if comando.lower() == "salir":
