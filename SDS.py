@@ -12,7 +12,7 @@ arduino: serial.Serial = serial.Serial(PUERTO, BAUDIOS, timeout=1)
 
 # Estado de grabación (True = grabando, False = detenido)
 is_recording: bool = False
-
+recording_active = 0
 
 def record_cameras(selected_devices: list[str]) -> list[VideoDeviceRecordingController]:
     """Start recording cameras and return controllers."""
@@ -59,14 +59,17 @@ def escuchar_arduino():
             mensaje = arduino.readline().decode('utf-8', errors='ignore').strip()
             if not mensaje:
                 continue
-
             print(f"[Arduino] {mensaje}")
-
-            if mensaje.startswith("alarmaActiva=1"):
+            
+            if mensaje == "0":
+                #stop_cameras()
+                recording_active = 0
+                
+            if mensaje.startswith("1") and recording_active == 0:
                 toggle_recording()
+                recording_active = 1
 
-            elif mensaje == "⚠ Sistema DESACTIVADO":
-                stop_cameras()
+
 
 
 # Lanzamos hilo para escuchar al Arduino
@@ -81,10 +84,14 @@ print("'salir' para cerrar.")
 while True:
     comando = input(">> ").strip()
     if comando.lower() == "salir":
+        arduino.write((comando + "\n").encode('utf-8'))
         stop_cameras()
         break
     if comando:
         arduino.write((comando + "\n").encode('utf-8'))
+    if comando.lower() == "desactivado":
+        #arduino.write((comando + "\n").encode('utf-8'))
+        stop_cameras()
 
 arduino.close()
 print("Conexión cerrada ")

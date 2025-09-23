@@ -24,6 +24,7 @@ def main():
         print(f"Detected cameras: {devices}")
 
         camera_controllers = record_cameras(devices[:2])
+        """"
     input_video = "Videos/VideoFiles/video.mp4"
     file_recorder = VideoFileRecorder(input_file=input_video, output_dir="Videos/VideoFiles/Clips")
     
@@ -31,13 +32,14 @@ def main():
     clip2 = file_recorder.create_clip(15, 25)  # 15s a 25s
     print(f"Clips started: {clip1}, {clip2}")
 
+    
+    file_recorder.wait_for_all_clips()
+    print("All video clips completed.")
+"""
     input("Press Enter to stop camera recordings...")
     for ctrl in camera_controllers:
         ctrl.stop()
     print("All camera recordings stopped.")
     
-    file_recorder.wait_for_all_clips()
-    print("All video clips completed.")
-
 if __name__ == "__main__":
     main()
