@@ -19,7 +19,7 @@ def record_cameras(selected_devices: list[str]) -> list[VideoDeviceRecordingCont
 def main():
     has_devices, message = VideoDeviceDetection.has_devices()
     print(message)
-    devices = VideoDeviceDetection.list_devices() if has_devices else []
+    devices = VideoDeviceDetection.get_devices() if has_devices else []
     if devices:
         print(f"Detected cameras: {devices}")
 
