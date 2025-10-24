@@ -16,7 +16,7 @@ class VideoDeviceDetection:
     This class is specifically designed for video capture devices.
     
     Class Attributes:
-        DIR (str): Directory path of the current module
+        ROOT_DIR (str): Root directory of the project
         FFMPEG_PATH (str): Full path to the FFmpeg executable
         MAX_CAMERA_INDEX (int): Maximum camera index to test
         _DEVICE_PATTERN (re.Pattern): Regex pattern for device parsing
@@ -24,9 +24,10 @@ class VideoDeviceDetection:
     """
     
     MAX_CAMERA_INDEX: Final[int] = 3  
-    
-    DIR: Final[str] = os.path.dirname(os.path.abspath(__file__))
-    FFMPEG_PATH: Final[str] = os.path.join(DIR, "FFMPEG", "ffmpeg.exe")
+
+    # Root project directory (one level above this file)
+    ROOT_DIR: Final[str] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    FFMPEG_PATH: Final[str] = os.path.join(ROOT_DIR, "FFMPEG", "ffmpeg.exe")
     
     _DEVICE_PATTERN: Final[re.Pattern] = re.compile(r'\"(.+?)\".*\(video\)')
     
@@ -42,25 +43,6 @@ class VideoDeviceDetection:
     def get_devices(cls) -> List[str]:
         """
         Retrieve list of available video capture devices.
-        
-        This method uses FFmpeg to query DirectShow devices on Windows systems.
-        Results are cached using LRU cache.
-        
-        Returns:
-            List[str]: List of video device names. Returns empty list if:
-                - No devices are found
-                - FFmpeg executable is not found
-                - Timeout occurs during device detection
-                - Any other error occurs during detection
-                
-        Raises:
-            No exceptions are raised; all errors are handled gracefully with
-            appropriate logging and empty list return.
-            
-        Example:
-            >>> devices = VideoDeviceDetection.get_devices()
-            >>> print(devices)
-            ['Integrated Webcam', 'USB Camera', 'Virtual Camera']
         """
         try:
             result = subprocess.run(
@@ -70,7 +52,6 @@ class VideoDeviceDetection:
                 timeout=10,
                 check=False
             )
-            
             return cls._parse_output(result.stderr)
             
         except subprocess.TimeoutExpired:
@@ -90,19 +71,6 @@ class VideoDeviceDetection:
     def _parse_output(output: str) -> List[str]:
         """
         Extract video device names from FFmpeg stderr output.
-        
-        Args:
-            output (str): FFmpeg stderr output containing device information
-                Expected format includes lines like:
-                "Device Name" (video)
-                
-        Returns:
-            List[str]: Extracted device names in order of appearance
-            
-        Example:
-            >>> output = '"Integrated Webcam" (video)\\n"USB Camera" (video)'
-            >>> VideoDeviceDetection._parse_output(output)
-            ['Integrated Webcam', 'USB Camera']
         """
         if not output:
             return []
@@ -117,25 +85,6 @@ class VideoDeviceDetection:
     def get_device_map(cls, max_test: Optional[int] = None) -> List[Tuple[int, str]]:
         """
         Map OpenCV device indices to FFmpeg device names.
-        
-        This method correlates OpenCV VideoCapture indices with actual device names
-        obtained from FFmpeg. It performs device testing by immediately
-        releasing resources after verification.
-        
-        Args:
-            max_test (Optional[int]): Maximum number of OpenCV device indices to test.
-                If None, uses cls.MAX_CAMERA_INDEX (default: 3).
-                
-        Returns:
-            List[Tuple[int, str]]: List of (opencv_index, device_name) tuples
-                opencv_index: Integer index usable with cv2.VideoCapture()
-                device_name: Human-readable device name from FFmpeg
-            
-        Example:
-            >>> # Default detection (tests cameras 0-2)
-            >>> device_map = VideoDeviceDetection.get_device_map()
-            >>> print(device_map)
-            [(0, "GENERAL WEBCAM")]
         """
         if max_test is None:
             max_test = cls.MAX_CAMERA_INDEX
@@ -171,18 +120,6 @@ class VideoDeviceDetection:
     def has_devices(cls) -> Tuple[bool, str]:
         """
         Check availability of video capture devices with detailed status information.
-        
-        Returns:
-            Tuple[bool, str]: A tuple containing:
-                - bool: True if at least one video device is detected, False otherwise
-                - str: Descriptive message about device detection status
-            
-        Example:
-            >>> has_devices, message = VideoDeviceDetection.has_devices()
-            >>> if has_devices:
-            ...     print(f"Ready to capture: {message}")
-            ... else:
-            ...     print(f"No capture possible: {message}")
         """
         devices = cls.get_devices()
         device_count = len(devices)
@@ -196,13 +133,6 @@ class VideoDeviceDetection:
     def clear_cache(cls) -> None:
         """
         Clear the LRU cache for device detection.
-        
-        This method should be called if the system's video device configuration
-        has changed during runtime (e.g., USB camera plugged/unplugged).
-        
-        Example:
-            >>> VideoDeviceDetection.clear_cache()
-            >>> # Next call to get_devices() will re-scan hardware
         """
         cls.get_devices.cache_clear()
         print("[INFO] Video device cache cleared - next detection will rescan hardware")
