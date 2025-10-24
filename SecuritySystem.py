@@ -12,36 +12,10 @@ from recording.VideoDeviceRecordingController import VideoDeviceRecordingControl
 class SecuritySystem:
     """
     Sistema integrado de grabación de video con sensores Arduino + FFmpeg.
-
-    Lógica general:
-    1. Escucha continuamente el puerto serie donde Arduino envía mensajes de sensores.
-    2. Cada alerta del Arduino inicia la grabación en la cámara correspondiente.
-    3. Cuando Arduino indica que la alarma se desactiva, se detienen todas las grabaciones.
-    
-    Ejemplo de mensajes Arduino:
-        "⚠ ALERTA: Sensor ENTRADA detectado" → Inicia grabación de cámara de entrada
-        "alarmaActiva=0" → Detiene todas las grabaciones
-
-    Comandos que Python envía al Arduino:
-        "activacion" → Arduino habilita sistema de sensores
-        "desactivacion" → Arduino deshabilita sistema y detiene grabaciones
     """
 
     def __init__(self, arduino_port: str = "COM3", output_dir: str = "Videos"):
-        """
-        Inicializa el sistema y establece conexión con Arduino.
-
-        Ejemplo de uso:
-            system = SecuritySystem(arduino_port="COM3", output_dir="Videos")
-        
-        Flujo interno:
-        - Crea carpeta de videos si no existe.
-        - Define mapeo de sensores a cámaras (SENSOR_TO_CAMERA)
-        - Inicializa estados de grabación por sensor (False al inicio)
-        - Inicializa diccionario de controladores de grabación por cámara
-        - Conecta Arduino
-        - Detecta cámaras disponibles en el sistema
-        """
+        """Inicializa el sistema y establece conexión con Arduino."""
         self.OUTPUT_DIR = output_dir
         os.makedirs(self.OUTPUT_DIR, exist_ok=True)
 
@@ -61,21 +35,30 @@ class SecuritySystem:
         # Controladores activos de grabación (uno por cámara)
         self.active_controllers: Dict[int, VideoDeviceRecordingController] = {}
 
+        # Control para evitar múltiples detecciones del mismo sensor
+        self.ultimo_mensaje_sensor: Dict[str, float] = {
+            sensor: 0.0 for sensor in self.SENSOR_TO_CAMERA
+        }
+        self.debounce_time = 2.0  # segundos entre detecciones del mismo sensor
+
         # Conexión al Arduino
-        self.arduino = serial.Serial(arduino_port, 9600, timeout=1)
-        time.sleep(2)  # Espera a que Arduino inicialice
-        print(f"✅ Arduino conectado en {arduino_port}")
+        print(f"🔌 Conectando a Arduino en {arduino_port}...")
+        try:
+            self.arduino = serial.Serial(arduino_port, 9600, timeout=1)
+            time.sleep(2)  # Espera a que Arduino inicialice
+            
+            # Limpiar buffer de entrada
+            self.arduino.reset_input_buffer()
+            
+            print(f"✅ Arduino conectado en {arduino_port}")
+        except serial.SerialException as e:
+            print(f"❌ Error conectando Arduino: {e}")
+            raise
 
         self._detect_cameras()
 
     def _detect_cameras(self):
-        """Detecta cámaras disponibles usando VideoDeviceDetection.
-
-        Ejemplo de salida:
-            🎥 2 cámaras detectadas
-            📹 Índice 0: USB Camera
-            📹 Índice 1: Webcam integrada
-        """
+        """Detecta cámaras disponibles usando VideoDeviceDetection."""
         has_devices, message = VideoDeviceDetection.has_devices()
         print(f"🎥 {message}")
 
@@ -88,13 +71,7 @@ class SecuritySystem:
             print("⚠️ No se detectaron cámaras disponibles")
 
     def _get_device_name_for_index(self, camera_index: int) -> Optional[str]:
-        """Obtiene el nombre físico de la cámara según su índice OpenCV.
-
-        Entrada:
-            camera_index = 0
-        Salida:
-            "USB Camera"  o None si no existe
-        """
+        """Obtiene el nombre físico de la cámara según su índice OpenCV."""
         device_map = VideoDeviceDetection.get_device_map()
         for opencv_idx, device_name in device_map:
             if opencv_idx == camera_index:
@@ -104,33 +81,51 @@ class SecuritySystem:
     def _parse_alert_message(self, message: str) -> Optional[str]:
         """
         Extrae el sensor que activó la alerta desde el mensaje del Arduino.
-
-        Ejemplos:
-            "⚠ ALERTA: Sensor ENTRADA detectado" → devuelve "ENTRADA"
-            "⚠ ALERTA: Sensor SALIDA detectado" → devuelve "SALIDA"
+        Mejorado para ser más robusto con variaciones en el mensaje.
         """
-        if "ENTRADA" in message.upper():
+        message_upper = message.upper()
+        
+        # Buscar cada sensor en el mensaje
+        if "ENTRADA" in message_upper:
             return "ENTRADA"
-        elif "SALIDA" in message.upper():
+        elif "SALIDA" in message_upper:
             return "SALIDA"
-        elif "ESTACIONAMIENTO" in message.upper():
+        elif "ESTACIONAMIENTO" in message_upper:
             return "ESTACIONAMIENTO"
-        elif "BODEGA" in message.upper():
+        elif "BODEGA" in message_upper:
             return "BODEGA"
+        
         return None
+
+    def _should_process_sensor(self, sensor: str) -> bool:
+        """
+        Verifica si debe procesarse una nueva detección del sensor.
+        Implementa debounce para evitar múltiples grabaciones del mismo evento.
+        """
+        current_time = time.time()
+        last_detection = self.ultimo_mensaje_sensor[sensor]
+        
+        # Si ya está grabando Y pasó poco tiempo, ignorar
+        if self.estado_sensores[sensor]:
+            time_since_last = current_time - last_detection
+            if time_since_last < self.debounce_time:
+                return False
+        
+        return True
 
     def _start_camera_recording(self, sensor: str, camera_index: int):
         """
         Inicia grabación de video para un sensor específico.
-
-        Lógica paso a paso:
-        1. Comprueba si la cámara ya está grabando (para evitar duplicados)
-        2. Obtiene nombre físico de la cámara
-        3. Genera un nombre de archivo con timestamp
-        4. Inicializa VideoDeviceRecorder y VideoDeviceRecordingController
-        5. Guarda controlador activo en active_controllers
-        6. Marca el sensor como grabando
+        Mejorado con mejor manejo de errores y logging.
         """
+        # Verificar debounce
+        if not self._should_process_sensor(sensor):
+            print(f"⏭️ Ignorando detección duplicada de {sensor} (debounce activo)")
+            return
+
+        # Actualizar timestamp de última detección
+        self.ultimo_mensaje_sensor[sensor] = time.time()
+
         if camera_index in self.active_controllers:
             print(f"⚠️ Cámara {camera_index} ya está grabando para otro sensor")
             return
@@ -143,6 +138,8 @@ class SecuritySystem:
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         filename = f"{sensor.lower()}_{timestamp}.mp4"
 
+        print(f"🎬 Iniciando grabación para sensor {sensor}...")
+        
         try:
             recorder = VideoDeviceRecorder(
                 video_device=device_name,
@@ -157,21 +154,20 @@ class SecuritySystem:
             self.estado_sensores[sensor] = True
 
             output_path = os.path.join(self.OUTPUT_DIR, filename)
-            print(f"🎥 {sensor} activó cámara {camera_index} ({device_name}) → {output_path}")
+            print(f"✅ {sensor} activó cámara {camera_index} ({device_name})")
+            print(f"   📁 Archivo: {output_path}")
 
         except Exception as e:
             print(f"❌ Error iniciando grabación para {sensor}: {e}")
+            import traceback
+            traceback.print_exc()
 
     def stop_all_recordings(self):
-        """
-        Detiene todas las grabaciones activas.
+        """Detiene todas las grabaciones activas."""
+        if not self.active_controllers:
+            print("ℹ️ No hay grabaciones activas para detener")
+            return
 
-        Flujo:
-        1. Itera sobre todas las cámaras activas
-        2. Llama a controller.stop() para detener FFmpeg
-        3. Elimina el controlador de active_controllers
-        4. Resetea estado de todos los sensores a False
-        """
         print("🛑 Deteniendo todas las grabaciones...")
         
         for camera_index in list(self.active_controllers.keys()):
@@ -179,7 +175,7 @@ class SecuritySystem:
                 controller = self.active_controllers[camera_index]
                 controller.stop()
                 del self.active_controllers[camera_index]
-                print(f"🛑 Cámara {camera_index} detenida")
+                print(f"✅ Cámara {camera_index} detenida")
             except Exception as e:
                 print(f"❌ Error deteniendo cámara {camera_index}: {e}")
 
@@ -192,65 +188,78 @@ class SecuritySystem:
     def escuchar_arduino(self):
         """
         Escucha continuamente los mensajes enviados por el Arduino.
-
-        Ejemplos de mensajes y acción:
-            "⚠ ALERTA: Sensor ENTRADA detectado" → inicia grabación sensor ENTRADA
-            "alarmaActiva=0" → detiene todas las grabaciones
-
-        Lógica:
-        - Mientras hay datos en buffer serie:
-            - Decodifica línea
-            - Detecta tipo de alerta o desactivación
-            - Inicia o detiene grabaciones según corresponda
+        Mejorado con mejor manejo de errores y logging más detallado.
         """
+        print("🎧 Iniciando escucha de Arduino...")
+        buffer = ""  # Buffer para manejar mensajes parciales
+        
         while True:
             try:
-                while self.arduino.in_waiting > 0:
-                    linea = self.arduino.readline().decode("utf-8").strip()
-                    print(f"📨 Arduino: {linea}")  # Debug
+                if self.arduino.in_waiting > 0:
+                    # Leer datos disponibles
+                    try:
+                        chunk = self.arduino.read(self.arduino.in_waiting).decode("utf-8", errors='ignore')
+                        buffer += chunk
+                    except UnicodeDecodeError:
+                        print("⚠️ Error decodificando datos del Arduino")
+                        continue
 
-                    # Mensaje de alerta de sensor
-                    if linea.startswith("⚠ ALERTA:"):
-                        sensor = self._parse_alert_message(linea)
-                        if sensor and sensor in self.SENSOR_TO_CAMERA:
-                            camera_index = self.SENSOR_TO_CAMERA[sensor]
-                            if not self.estado_sensores[sensor]:
+                    # Procesar líneas completas
+                    while '\n' in buffer:
+                        linea, buffer = buffer.split('\n', 1)
+                        linea = linea.strip()
+                        
+                        if not linea:
+                            continue
+                        
+                        print(f"📨 Arduino: {linea}")
+                        
+                        # Detectar alerta de sensor
+                        if "ALERTA" in linea.upper() and "SENSOR" in linea.upper():
+                            sensor = self._parse_alert_message(linea)
+                            if sensor and sensor in self.SENSOR_TO_CAMERA:
+                                camera_index = self.SENSOR_TO_CAMERA[sensor]
+                                print(f"🚨 Sensor {sensor} detectado → Cámara {camera_index}")
                                 self._start_camera_recording(sensor, camera_index)
-
-                    # Mensaje de desactivación
-                    elif linea == "alarmaActiva=0" or "Sistema DESACTIVADO" in linea:
-                        self.stop_all_recordings()
+                            else:
+                                print(f"⚠️ Sensor no reconocido en mensaje: {linea}")
+                        
+                        # Detectar desactivación
+                        elif "alarmaActiva=0" in linea or "DESACTIVADO" in linea.upper():
+                            print("🛑 Señal de desactivación recibida desde Arduino")
+                            self.stop_all_recordings()
                 
-                time.sleep(0.01)  # evita saturar CPU
+                time.sleep(0.01)  # Pequeña pausa para no saturar CPU
                 
+            except serial.SerialException as e:
+                print(f"❌ Error de conexión serial: {e}")
+                print("🔌 Intentando reconectar...")
+                time.sleep(2)
+                try:
+                    self.arduino.close()
+                    self.arduino.open()
+                    print("✅ Reconexión exitosa")
+                except:
+                    print("❌ No se pudo reconectar. Terminando escucha.")
+                    break
+                    
             except Exception as e:
-                print(f"❌ Error leyendo Arduino: {e}")
-                break
+                print(f"❌ Error inesperado en escucha: {e}")
+                import traceback
+                traceback.print_exc()
+                time.sleep(1)
 
     def enviar_a_arduino(self, comando: str):
-        """
-        Envía comando al Arduino.
-
-        Ejemplos:
-            "activacion" → Arduino habilita sensores
-            "desactivacion" → Arduino deshabilita sensores
-        """
+        """Envía comando al Arduino."""
         try:
             self.arduino.write((comando + "\n").encode("utf-8"))
             print(f"➡️ Enviado a Arduino: {comando}")
+            time.sleep(0.1)  # Pequeña pausa para que Arduino procese
         except Exception as e:
             print(f"❌ Error enviando comando: {e}")
 
     def get_status_report(self) -> str:
-        """
-        Devuelve un reporte legible del estado actual del sistema.
-
-        Ejemplo de salida:
-            📊 ESTADO DEL SISTEMA:
-               Grabaciones activas: 1
-               ENTRADA (cám 0): 🔴 GRABANDO
-               SALIDA (cám 0): ⚪ INACTIVO
-        """
+        """Devuelve un reporte legible del estado actual del sistema."""
         report = "\n📊 ESTADO DEL SISTEMA:\n"
         report += f"   Grabaciones activas: {len(self.active_controllers)}\n"
 
@@ -263,27 +272,21 @@ class SecuritySystem:
 
     def close(self):
         """Detiene todas las grabaciones y cierra el Arduino."""
+        print("🧹 Cerrando sistema...")
         self.stop_all_recordings()
-        if hasattr(self, 'arduino'):
+        if hasattr(self, 'arduino') and self.arduino.is_open:
             self.arduino.close()
             print("✅ Arduino desconectado")
 
 
 def main():
-    """
-    Función principal que inicia el sistema de monitoreo.
+    """Función principal que inicia el sistema de monitoreo."""
+    try:
+        system = SecuritySystem(arduino_port="COM3", output_dir="Videos")
+    except Exception as e:
+        print(f"❌ Error iniciando sistema: {e}")
+        return
 
-    Flujo paso a paso:
-    1. Crea instancia de SecuritySystem
-    2. Muestra estado inicial
-    3. Lanza hilo que escucha Arduino
-    4. Espera comandos de usuario por consola:
-        - "activacion" → habilita sensores
-        - "desactivacion" → deshabilita sensores y detiene grabaciones
-        - "status" → muestra estado actual
-        - "quit" → cierra el sistema
-    """
-    system = SecuritySystem(arduino_port="COM3", output_dir="Videos")
     print(system.get_status_report())
 
     # Hilo para escuchar Arduino
@@ -295,6 +298,7 @@ def main():
     print("   • 'activacion' - Habilitar sistema de sensores")
     print("   • 'desactivacion' - Deshabilitar y detener grabaciones")
     print("   • 'status' - Mostrar estado actual")
+    print("   • 'stop' - Detener todas las grabaciones manualmente")
     print("   • 'quit' - Salir del programa")
     print("-" * 60)
 
@@ -306,18 +310,19 @@ def main():
                 break
             elif cmd == "status":
                 print(system.get_status_report())
+            elif cmd == "stop":
+                system.stop_all_recordings()
             elif cmd in ["activacion", "desactivacion"]:
                 system.enviar_a_arduino(cmd)
                 if cmd == "desactivacion":
                     # Detenemos también localmente por si Arduino no responde
                     system.stop_all_recordings()
             else:
-                print("⚠️ Comando no reconocido. Use: activacion, desactivacion, status, quit")
+                print("⚠️ Comando no reconocido. Use: activacion, desactivacion, status, stop, quit")
 
     except KeyboardInterrupt:
         print("\n⏹️ Programa interrumpido por usuario")
     finally:
-        print("🧹 Cerrando sistema...")
         system.close()
         print("✅ Sistema cerrado correctamente")
 
