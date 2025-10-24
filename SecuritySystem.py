@@ -242,9 +242,11 @@ def main():
                 break
             elif cmd == "status":
                 print(system.get_status_report())
-            elif cmd in ["activacion", "desactivacion"]:
+            elif cmd in ["activado", "desactivado"]:
                 system.enviar_a_arduino(cmd)
-                if cmd == "desactivacion":
+                if cmd == "desactivado":
+                    # Detenemos también localmente por si Arduino no responde
+
                     system.stop_all_recordings()
             else:
                 print("⚠️ Comando no reconocido. Use: activacion, desactivacion, status, quit")
