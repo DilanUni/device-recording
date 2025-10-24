@@ -98,10 +98,10 @@ class SecuritySystem:
             print(f"🎬 Intentando iniciar grabación para {sensor}...")
             
             recorder = VideoDeviceRecorder(
-                video_device=device_name,
-                output_filename=filename,
-                output_dir=self.OUTPUT_DIR
-            )
+            video_device=device_name,
+            output_file=filename,
+            output_dir=self.OUTPUT_DIR
+        )
 
             controller = VideoDeviceRecordingController(recorder)
             controller.start()
@@ -245,7 +245,6 @@ def main():
             elif cmd in ["activado", "desactivado"]:
                 system.enviar_a_arduino(cmd)
                 if cmd == "desactivado":
-                    # Detenemos también localmente por si Arduino no responde
 
                     system.stop_all_recordings()
             else:
