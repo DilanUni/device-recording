@@ -97,11 +97,12 @@ class SecuritySystem:
         try:
             print(f"🎬 Intentando iniciar grabación para {sensor}...")
             
+            output_path = os.path.join(self.OUTPUT_DIR, filename)
             recorder = VideoDeviceRecorder(
             video_device=device_name,
-            output_file=filename,
-            output_dir=self.OUTPUT_DIR
-        )
+            output_file=output_path
+)
+
 
             controller = VideoDeviceRecordingController(recorder)
             controller.start()
@@ -129,15 +130,18 @@ class SecuritySystem:
             
         print("🛑 Deteniendo todas las grabaciones...")
         
-        for sensor in list(self.active_controllers.keys()):
+        for sensor, controller in list(self.active_controllers.items()):
             try:
-                controller = self.active_controllers[sensor]
-                controller.stop()
-                del self.active_controllers[sensor]
-                self.estado_sensores[sensor] = False
-                print(f"🛑 Grabación de {sensor} detenida")
+              controller.stop()
+              self.estado_sensores[sensor] = False
+              print(f"🛑 Grabación de {sensor} detenida")
             except Exception as e:
-                print(f"❌ Error deteniendo {sensor}: {e}")
+              print(f"❌ Error deteniendo {sensor}: {e}")
+            finally:
+        # Asegurar que se elimine sin duplicar
+              if sensor in self.active_controllers:
+                del self.active_controllers[sensor]
+
 
         print("✅ Todas las grabaciones detenidas")
 

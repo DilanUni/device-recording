@@ -15,11 +15,12 @@ class VideoDeviceRecorder:
     Use RecordingController to run multiple instances concurrently.
     """
 
-    CODECS: Final[dict[str, str]] = {
-        "nvidia": "hevc_nvenc",  # NVIDIA H.265
-        "amd": "hevc_amf",       # AMD H.265
-        "cpu": "libx265"         # CPU H.265
-    }
+    CODECS: Final[dict[str, str]] = {       # edite este codecs a la version anterior
+     "nvidia": "h264_nvenc",  # NVIDIA H.264
+     "amd": "h264_amf",       # AMD H.264
+     "cpu": "libx264"         # CPU H.264 (más estable)
+}
+
 
     def __init__(
         self,
@@ -55,7 +56,7 @@ class VideoDeviceRecorder:
 
         # Detect GPU and pick codec
         gpu_vendor = DetectGPU.detect_gpu_vendor()
-        self.codec = self.CODECS.get(gpu_vendor, "libx265")
+        self.codec = self.CODECS.get(gpu_vendor, "libx264")
 
         # Logger
         self.video_logger = VideoLogger()
@@ -67,6 +68,8 @@ class VideoDeviceRecorder:
         base_cmd = [
             self.ffmpeg_path,
             "-f", "dshow",
+            "-video_size", self.resolution,  #agrege estas dos lineas
+            "-framerate", "30",              #
             "-i", f"video={self.video_device}",
             "-c:v", self.codec,
             "-s", self.resolution,
@@ -80,13 +83,13 @@ class VideoDeviceRecorder:
             "-pix_fmt", "yuv420p"
         ]
 
-        input_optimizations = [
-            "-fflags", "+nobuffer+flush_packets",
-            "-flags", "low_delay",
-            "-avioflags", "direct",
-            "-probesize", "32",
-            "-analyzeduration", "0"
-        ]
+        input_optimizations = [            # cambie los imput 
+           "-fflags", "+genpts",
+           "-rtbufsize", "200M",
+           "-use_wallclock_as_timestamps", "1",
+           "-thread_queue_size", "512"
+]
+
 
         # GPU-specific parameters
         gpu_params: List[str] = []
@@ -164,12 +167,12 @@ class VideoDeviceRecorder:
             return False
 
     def stop_recording(self) -> bool:
-        """
-        Stop the recording gracefully.
-        Returns True if stopped successfully.
-        """
-        if not self.is_recording or not self.process:
-            self.video_logger.log_event(
+        
+      """
+    Detiene la grabación de forma segura asegurando que el archivo MP4 quede reproducible.
+    """
+      if not self.is_recording or not self.process:
+        self.video_logger.log_event(
             source=self.video_device,
             output_file=self.output_file,
             codec=self.codec,
@@ -177,33 +180,54 @@ class VideoDeviceRecorder:
             status="NOT_RECORDING",
             extra={"message": "No recording in progress"}
         )
-            return False
+        return False
 
-        try:
-            # Send "q" to FFmpeg to stop
-            self.process.stdin.write("q\n")
-            self.process.stdin.flush()
-            self.process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            # Kill if graceful stop fails
-            self.process.terminate()
-            self.process.wait(timeout=5)
-        except Exception as e:
-            self.video_logger.log_event(
-                source=self.video_device,
-                output_file=self.output_file,
-                codec=self.codec,
-                event="ERROR",
-                status="FAILED",
-                extra={"exception": str(e)}
-            )
-            return False
-        finally:
-            self.is_recording = False
-            self.process = None
-            self._log_recording_event("STOP")
+      try:
+        # Enviar señal de salida a FFmpeg
+        if self.process.stdin:
+            try:
+                self.process.stdin.write("q\n")
+                self.process.stdin.flush()
+            except Exception:
+                pass
 
-        return True
+        # Esperar que FFmpeg cierre correctamente
+        self.process.communicate(timeout=8)
+
+      except subprocess.TimeoutExpired:
+        # Si no responde, forzar cierre
+        self.process.terminate()
+        self.process.wait(timeout=5)
+      except Exception as e:
+        self.video_logger.log_event(
+            source=self.video_device,
+            output_file=self.output_file,
+            codec=self.codec,
+            event="ERROR",
+            status="FAILED",
+            extra={"exception": str(e)}
+        )
+        return False
+      finally:
+        # Liberar proceso y marcar finalización
+        self.is_recording = False
+        self._log_recording_event("STOP")
+        self.process = None
+
+    # 🔧 Reparar encabezado MP4 si quedó corrupto
+      try:
+        repaired_file = self.output_file.replace(".mp4", "_fixed.mp4")
+        repair_cmd = [
+            self.ffmpeg_path, "-i", self.output_file,
+            "-c", "copy", "-movflags", "+faststart", repaired_file, "-y"
+        ]
+        subprocess.run(repair_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        os.replace(repaired_file, self.output_file)
+      except Exception:
+        pass
+
+      return True
+
 
     def is_recording_active(self) -> bool:
         """
