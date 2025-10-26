@@ -15,7 +15,7 @@ class VideoDeviceRecorder:
     Use RecordingController to run multiple instances concurrently.
     """
 
-    CODECS: Final[dict[str, str]] = {       # edite este codecs a la version anterior
+    CODECS: Final[dict[str, str]] = {
      "nvidia": "h264_nvenc",  # NVIDIA H.264
      "amd": "h264_amf",       # AMD H.264
      "cpu": "libx264"         # CPU H.264 (más estable)
@@ -68,8 +68,8 @@ class VideoDeviceRecorder:
         base_cmd = [
             self.ffmpeg_path,
             "-f", "dshow",
-            "-video_size", self.resolution,  #agrege estas dos lineas
-            "-framerate", "30",              #
+            "-video_size", self.resolution,
+            "-framerate", "30",
             "-i", f"video={self.video_device}",
             "-c:v", self.codec,
             "-s", self.resolution,

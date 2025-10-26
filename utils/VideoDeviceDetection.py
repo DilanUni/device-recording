@@ -2,47 +2,44 @@ import subprocess
 import re
 import os
 import cv2
-from typing import List, Tuple, Final, Optional
+from typing import List, Tuple, Final
 from functools import lru_cache
 
+try:
+    from utils.system_log import SystemLog
+except ModuleNotFoundError:
+    from system_log import SystemLog
 
 class VideoDeviceDetection:
     """
-    Video device detection and management using FFmpeg.
-    
-    Provides webcam and video input device detection with caching
-    and subprocess handling for Windows DirectShow devices.
-    
-    This class is specifically designed for video capture devices.
-    
-    Class Attributes:
-        ROOT_DIR (str): Root directory of the project
-        FFMPEG_PATH (str): Full path to the FFmpeg executable
-        MAX_CAMERA_INDEX (int): Maximum camera index to test
-        _DEVICE_PATTERN (re.Pattern): Regex pattern for device parsing
-        _DEVICE_CMD_TEMPLATE (List[str]): Command template for device detection
+    Video device detection and management using FFmpeg + OpenCV.
+    Logging is used for status reporting instead of print().
     """
-    
-    MAX_CAMERA_INDEX: Final[int] = 3  
 
-    # Root project directory (one level above this file)
-    ROOT_DIR: Final[str] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    FFMPEG_PATH: Final[str] = os.path.join(ROOT_DIR, "FFMPEG", "ffmpeg.exe")
-    
+    DIR: Final[str] = os.path.dirname(os.path.abspath(__file__))
+    ROOT_ROOT: Final[str] = os.path.dirname(DIR) 
+    FFMPEG_PATH: Final[str] = os.path.join(ROOT_ROOT, "FFMPEG", "ffmpeg.exe")
+
+    # Regex pattern for extracting device names from FFmpeg output
     _DEVICE_PATTERN: Final[re.Pattern] = re.compile(r'\"(.+?)\".*\(video\)')
-    
+
+    # Command template to list video devices with FFmpeg
     _DEVICE_CMD_TEMPLATE: Final[List[str]] = [
         FFMPEG_PATH,
         "-list_devices", "true",
         "-f", "dshow",
         "-i", "dummy"
     ]
-    
+
+    # Logger de clase
+    log: Final[SystemLog] = SystemLog(__name__)
+
     @classmethod
     @lru_cache(maxsize=1)
     def get_devices(cls) -> List[str]:
         """
-        Retrieve list of available video capture devices.
+        Get the list of video device names detected by FFmpeg.
+        Returns a cached result to avoid repeated subprocess calls.
         """
         try:
             result = subprocess.run(
@@ -52,124 +49,108 @@ class VideoDeviceDetection:
                 timeout=10,
                 check=False
             )
+            cls.log.debug("FFmpeg device detection subprocess executed successfully")
             return cls._parse_output(result.stderr)
-            
+
         except subprocess.TimeoutExpired:
-            print("[ERROR] Timeout: FFmpeg device detection exceeded 10 seconds")
+            cls.log.error("Timeout: FFmpeg device detection exceeded 10 seconds")
             return []
         except FileNotFoundError:
-            print(f"[ERROR] FFmpeg executable not found at: {cls.FFMPEG_PATH}")
+            cls.log.error(f"FFmpeg executable not found at: {cls.FFMPEG_PATH}")
             return []
         except subprocess.SubprocessError as e:
-            print(f"[ERROR] Subprocess error during device detection: {e}")
+            cls.log.error(f"Subprocess error during device detection: {e}")
             return []
         except Exception as e:
-            print(f"[ERROR] Unexpected error during device detection: {e}")
+            cls.log.error(f"Unexpected error during device detection: {e}")
             return []
-    
+
     @staticmethod
     def _parse_output(output: str) -> List[str]:
         """
-        Extract video device names from FFmpeg stderr output.
+        Parse FFmpeg stderr output to extract device names.
         """
         if not output:
             return []
-            
         try:
             return VideoDeviceDetection._DEVICE_PATTERN.findall(output)
         except re.error as e:
-            print(f"[ERROR] Regex pattern matching failed: {e}")
+            VideoDeviceDetection.log.error(f"Regex pattern matching failed: {e}")
             return []
-    
+
     @classmethod
-    def get_device_map(cls, max_test: Optional[int] = None) -> List[Tuple[int, str]]:
+    @lru_cache(maxsize=1)
+    def get_device_map(cls) -> List[Tuple[int, str]]:
         """
-        Map OpenCV device indices to FFmpeg device names.
+        Map OpenCV device indices to FFmpeg-reported device names.
+        If no devices are detected, returns an empty list and shows a warning.
         """
-        if max_test is None:
-            max_test = cls.MAX_CAMERA_INDEX
-            
         device_names = cls.get_devices()
         device_map: List[Tuple[int, str]] = []
-        
-        print(f"[INFO] Testing OpenCV camera indices 0-{max_test-1}...")
-        
-        for opencv_idx in range(max_test):
+
+        if not device_names:
+            cls.log.warning("No video devices detected. Skipping OpenCV test loop.")
+            return []
+
+        cls.log.info(f"Testing {len(device_names)} device indices with OpenCV...")
+
+        for opencv_idx, device_name in enumerate(device_names):
             cap = cv2.VideoCapture(opencv_idx)
-            
             if not cap.isOpened():
                 cap.release()
                 continue
-            
+
             ret, _ = cap.read()
             cap.release()
-            
             if ret:
-                device_name = (
-                    device_names[len(device_map)] 
-                    if len(device_map) < len(device_names)
-                    else f"Camera {opencv_idx}"
-                )
                 device_map.append((opencv_idx, device_name))
-                print(f"[INFO] Found working camera at index {opencv_idx}: '{device_name}'")
-        
-        print(f"[INFO] Camera detection completed. Found {len(device_map)} working cameras.")
+                cls.log.info(f"Found working camera at index {opencv_idx}: '{device_name}'")
+
+        if not device_map:
+            cls.log.warning("No working cameras available through OpenCV.")
+        else:
+            cls.log.info(f"Camera detection completed. Found {len(device_map)} working cameras.")
+
         return device_map
-    
+
     @classmethod
     def has_devices(cls) -> Tuple[bool, str]:
         """
-        Check availability of video capture devices with detailed status information.
+        Check if there are any video devices available.
         """
         devices = cls.get_devices()
         device_count = len(devices)
-        
         if device_count == 0:
+            cls.log.warning("No video devices detected.")
             return False, "No video devices detected."
-        
+        cls.log.info(f"Found {device_count} video device(s).")
         return True, f"Found {device_count} video device(s)."
-    
+
     @classmethod
     def clear_cache(cls) -> None:
         """
-        Clear the LRU cache for device detection.
+        Clear the cached device list so the next call rescans hardware.
         """
         cls.get_devices.cache_clear()
-        print("[INFO] Video device cache cleared - next detection will rescan hardware")
+        cls.log.info("Video device cache cleared - next detection will rescan hardware")
 
 
 if __name__ == "__main__":
-    print("=== Video Device Detection Test ===")
-    
-    has_devices, status_message = VideoDeviceDetection.has_devices()
-    print(f"Device Status: {status_message}")
-    
-    if not has_devices:
-        print("No video devices available for testing.")
-        exit(1)
-    
-    print("\n=== Available Devices ===")
-    devices = VideoDeviceDetection.get_devices()
-    for i, device_name in enumerate(devices):
-        print(f"  {i}: {device_name}")
-    
-    print(f"\n=== OpenCV Device Mapping (Testing indices 0-{VideoDeviceDetection.MAX_CAMERA_INDEX-1}) ===")
-    device_map = VideoDeviceDetection.get_device_map()
-    
-    if device_map:
-        print("\nOpenCV Index -> Device Name:")
-        for opencv_idx, device_name in device_map:
-            print(f"  cv2.VideoCapture({opencv_idx}) -> '{device_name}'")
-    else:
-        print("No functional OpenCV devices found.")
-    
-    print("\n=== Cache Test ===")
-    print("First call (cache miss)...")
-    devices_1 = VideoDeviceDetection.get_devices()
-    print("Second call (cache hit)...")
-    devices_2 = VideoDeviceDetection.get_devices()
-    print(f"Results identical: {devices_1 == devices_2}")
-    
-    print("\nClearing cache...")
-    VideoDeviceDetection.clear_cache()
-    print("Cache cleared successfully.")
+    log = SystemLog("VideoDeviceDetectionTest")
+
+    log.info("=== Video Device Detection Test ===")
+
+    log.info("Step 1: Checking if devices exist...")
+    has_dev, msg = VideoDeviceDetection.has_devices()
+    log.info(f"Result: {msg}")
+
+    if has_dev:
+        log.info("Step 2: Listing all detected devices (FFmpeg)...")
+        devices = VideoDeviceDetection.get_devices()
+        for idx, dev in enumerate(devices):
+            log.info(f"  {idx}: {dev}")
+
+        log.info("Step 3: Mapping OpenCV indices to device names...")
+        device_map = VideoDeviceDetection.get_device_map()
+        for idx, dev_name in device_map:
+            log.info(f"  OpenCV Index {idx} -> {dev_name}")
